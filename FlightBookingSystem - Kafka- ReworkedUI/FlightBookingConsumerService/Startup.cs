@@ -1,0 +1,104 @@
+using FlightBookingConsumerService.Models;
+using GreenPipes;
+using MassTransit;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.HttpsPolicy;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using SharedClassModels.DataModels;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Reflection;
+using System.Threading.Tasks;
+
+
+namespace FlightBookingConsumerService
+{
+    public class Startup
+    {
+        public Startup(IConfiguration configuration)
+        {
+            Configuration = configuration;
+        }
+
+        public IConfiguration Configuration { get; }
+
+        // This method gets called by the runtime. Use this method to add services to the container.
+        public void ConfigureServices(IServiceCollection services)
+        {
+            services.AddDbContext<AirlineDBContext>(options => options.UseSqlServer(Configuration.GetConnectionString("AirlineDb")));
+            //services.AddMassTransit(x =>
+            //{
+            //    x.AddConsumer<Consumer>();
+            //    x.AddBus(provider => Bus.Factory.CreateUsingRabbitMq(cfg =>
+            //    {
+            //        cfg.UseHealthCheck(provider);
+            //        cfg.Host(new Uri("rabbitmq://localhost"), h =>
+            //        {
+            //            h.Username("guest");
+            //            h.Password("guest");
+            //        });
+            //        cfg.ReceiveEndpoint("ticketQueue", ep =>
+            //        {
+            //            ep.PrefetchCount = 16;
+            //            ep.UseMessageRetry(r => r.Interval(2, 100));
+            //            ep.ConfigureConsumer<Consumer>(provider);
+            //        });
+            //    }));
+            //});
+
+            services.AddMassTransit(x =>
+            {
+                x.UsingRabbitMq((context, cfg) => cfg.ConfigureEndpoints(context));
+                x.AddRider(rider =>
+                {
+                    rider.AddConsumer<Consumer>();
+                    rider.UsingKafka((context, k) =>
+                    {
+                        k.Host("localhost:9092");
+                        k.TopicEndpoint<TblAirlineRegister>(nameof(TblAirlineRegister), GetUniqueName(nameof(TblAirlineRegister)), e => {
+                            e.CheckpointInterval = TimeSpan.FromSeconds(10);
+                            e.ConfigureConsumer<Consumer>(context);
+                        });
+                    });
+                });
+            });
+            services.AddMassTransitHostedService();
+            services.AddControllers();
+        }
+
+        private string GetUniqueName(string eventname)
+        {
+            string hostname = Dns.GetHostName();
+            string classAssembly = Assembly.GetCallingAssembly().GetName().Name;
+            return $"{hostname}.{classAssembly}.{eventname}";
+        }
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        {
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+
+            app.UseHttpsRedirection();
+
+            app.UseRouting();
+
+            app.UseAuthorization();
+
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+            });
+        }
+    }
+}
